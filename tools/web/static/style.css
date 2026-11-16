@@ -395,3 +395,5 @@ body { display: flex; flex-direction: column; height: 100vh; }
 .mcp-activity-list { max-height: 180px; overflow: auto; font-size: 12px; overflow-wrap: anywhere; }
 .mcp-activity-item { padding: 6px 0; border-bottom: 1px solid var(--line); }
 #mcpActivityStatus { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-join-option { display:flex; align-items:center; gap:8px; margin:10px 0; font-size:12px; cursor:pointer; }
+.track-join-option input { margin:0; accent-color:var(--active); }

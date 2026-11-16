@@ -29,6 +29,21 @@ the reconstructed SMPL-H motion in a 3D viewer beside the input video.
   preview, then confirm. Without a choice within 10 minutes, the suggested person
   (longest / largest track) is used. With the switch off, it is chosen automatically.
   Detection time excludes the wait for selection.
+- **Join fragments of the same person**: tracking can sometimes assign two or
+  more IDs to one person at different times. Without manual selection, the
+  existing default chooses the track with the most detected frames (using
+  average box area to break ties), so only the longer fragment may be generated.
+  To recover the requested range, turn on *Manual person selection*, preview
+  and select the fragments belonging to the same person, then check
+  *Join selected fragments as one person* and confirm. Joining is **off by
+  default**; selecting several people without checking it still generates
+  separate results. Joining refuses overlapping fragments, gaps longer than
+  15 frames, large box jumps, and incomplete coverage of the requested range
+  (up to 5 missing frames at either edge are allowed). These frame limits use
+  the normalized 30 FPS timeline. Boxes across short gaps are interpolated
+  before a single motion-generation run; generated motions are not spliced.
+  Continuity checks cannot establish identity: do not join different people
+  who appear sequentially in the same place.
 - **Re-run**: a finished run can be re-run from *Recent runs* with the current
   settings; matching detection, camera and feature caches are reused. Changing
   camera mode uses separate camera/SAM caches.

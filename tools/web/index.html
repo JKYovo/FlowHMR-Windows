@@ -102,6 +102,11 @@
       <h3 class="card-title" id="personTitle" data-i18n="person.choose">选择人物</h3>
       <p class="card-help" id="personCount"></p>
       <div class="person-list" id="personList"></div>
+      <label class="track-join-option hidden" id="personJoinRow">
+        <input type="checkbox" id="personJoinTracks">
+        <span data-i18n="person.join_label">将所选片段接续为同一人</span>
+      </label>
+      <p class="card-help hidden" id="personJoinHelp" data-i18n="person.join_help">请先预览并确认是同一个人。仅接续不重叠的短缺口，需覆盖处理区间。</p>
       <button type="button" class="btn-primary block" id="personConfirm" disabled data-i18n="person.check">请勾选人物</button>
       <p class="error hidden" id="personError"></p>
       <button type="button" class="btn-secondary block rerun-btn hidden" id="personReselect"

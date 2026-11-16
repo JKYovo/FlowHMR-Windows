@@ -50,6 +50,7 @@ from flowhmr.utils.runtime_capabilities import (
 from flowhmr.utils.runtime_hamer import hamer_available, HAMER_ISSUES, HAMER_STRIDES, MISSING_HAMER
 from flowhmr.utils.runtime_preview_inspection import PreviewInspection
 from flowhmr.utils.runtime_preview_thumbnail import ensure_thumbnail
+from flowhmr.utils.track_fragments import TrackJoinError, join_candidates
 from flowhmr.core.bodymodels.body_variants import available_variants, model_path, write_preview_vertices
 from flowhmr.model_files import (
     FLOWHMR_BASE_FILES, HAMER_FILES, MODEL_ROOT, SAM3D_FILES, VGGT, SMPLH_FILES, core_model_paths,
@@ -835,6 +836,26 @@ def _selected_track(candidate, *, automatic=False):
             "person_track": {key: candidate[key] for key in ("track_id", "num_frames", "start", "end")}}
 
 
+def _confirm_joined_track(job_id, result, candidate):
+    """Use one joined track before SAM/camera inference; do not concatenate motions."""
+    from flowhmr.utils.runtime_video_processing import TrackInfo
+
+    boxes = np.asarray(candidate["boxes"], dtype=np.float32)
+    frames = np.asarray(candidate["frames"], dtype=np.int64)
+    track = TrackInfo(candidate["track_id"], frames, boxes, len(frames),
+                      float(np.prod(boxes[:, 2:] - boxes[:, :2], axis=1).mean()))
+    with JOBS_LOCK:
+        if job_id in CANCEL_REQUESTS:
+            raise JobCancelled()
+        # The pipeline maps this candidate back to its original track index.
+        # Replacing only that slot leaves normal multi-person selection unchanged.
+        result.tracks[candidate["track_index"]] = track
+        JOBS[job_id].update(status="running", candidates=None,
+                            **_selected_track(candidate), track_fragments=candidate["source_tracks"],
+                            message="Joined confirmed track fragments")
+        _persist_job_locked(JOBS[job_id])
+
+
 def _confirm_people(job_id, result, candidates, people, *, automatic):
     """Keep the first track in this job and queue a separate job for each other track."""
     first, *remaining = people
@@ -1161,6 +1182,7 @@ def run_job(job_id):
         finally:
             with JOBS_LOCK:
                 people = slot["people"]
+                joined = slot.get("joined_candidate")
                 stage = JOBS[job_id]["stages"][STAGE_INDEX["detection"]]
                 stage["paused_seconds"] = stage.get("paused_seconds", 0.0) + max(
                     0.0, time.time() - stage.pop("paused_at"),
@@ -1168,6 +1190,9 @@ def run_job(job_id):
                 stage["status"] = "running"
                 SELECTIONS.pop(job_id, None)
         _raise_if_cancelled(job_id)
+        if joined is not None:
+            _confirm_joined_track(job_id, result, joined)
+            return joined["index"]
         if people is None and JOBS[job_id].get('selection_policy') == 'explicit':
             raise UserMessage('等待人物选择已超时，请重跑任务并重新选择。', 'selection_timeout')
         chosen = people or [default_idx]
@@ -2047,7 +2072,7 @@ def api_rerun(job_id):
         if person is not None and not reselect and os.path.isfile(os.path.join(dst_sub, f"{SUB}_bbox.npz")):
             _copy_person_thumbnail(job_dir(job_id), job_dir(job["id"]), person)
             update_job(job["id"], selected_person=person, person_track=src.get("person_track"),
-                       selection_auto=src.get("selection_auto", False))
+                       selection_auto=src.get("selection_auto", False), track_fragments=src.get("track_fragments"))
     enqueue(job)
     return jsonify(job_id=job['id'], status='queued', params=params, selection_policy=job['selection_policy'])
 
@@ -2085,6 +2110,9 @@ def api_select(job_id):
     if not isinstance(body, dict):
         return api_error("people_required", "请提交所选人物。", 400)
     people = body.get("people", [body.get("person")])
+    join = body.get("join_tracks", False)
+    if type(join) is not bool:
+        return api_error("track_join_invalid", "Invalid track joining request.", 400)
     with JOBS_LOCK:
         job = JOBS.get(job_id)
         if job is None:
@@ -2096,6 +2124,16 @@ def api_select(job_id):
         if not isinstance(people, list) or not people or any(type(i) is not int or not 0 <= i < n for i in people):
             return api_error("people_required", "请至少勾选一个已检测到的人物。", 400)
         people = list(dict.fromkeys(people))
+        if join:
+            start, end = job_detection_range(job["params"])
+            total = job.get("source_frames") or 0
+            if total <= 0:
+                return api_error("track_join_coverage", "Requested video range is not available.", 400)
+            end = total - 1 if end is None else min(end, total - 1)
+            try:
+                slot["joined_candidate"] = join_candidates(job["candidates"], people, (start, end))
+            except TrackJoinError as error:
+                return api_error(error.code, "Cannot safely join these track fragments.", 400)
         slot["people"] = people
         slot["event"].set()
     return jsonify(ok=True, person=people[0], people=people)

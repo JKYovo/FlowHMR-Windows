@@ -128,8 +128,8 @@ export const retargetPresetThumbnailUrl = (id) => `${retargetPresetsUrl}/${encod
 export const saveRetargetPresetThumbnail = (id, png) => json(retargetPresetThumbnailUrl(id), {
   method:"POST", headers:{ "Content-Type":"image/png" }, body:png,
 });
-export const selectPeople = (id, people) => postJson(`/api/jobs/${id}/select`,
-  people.length === 1 ? { people, person: people[0] } : { people });
+export const selectPeople = (id, people, joinTracks = false) => postJson(`/api/jobs/${id}/select`,
+  { ...(people.length === 1 ? { people, person: people[0] } : { people }), ...(joinTracks ? { join_tracks: true } : {}) });
 export const rerunJob = (id, params) => postJson(`/api/jobs/${id}/rerun`, params).then((res) => res.job_id);
 export const cancelJob = (id) => postJson(`/api/jobs/${id}/cancel`);
 export const prepareScene = (id) => postJson(`/api/jobs/${id}/scene`);

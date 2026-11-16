@@ -19,6 +19,8 @@ export function initPersonSelect(bus) {
   let submitting = false, confirmed = false;
 
   const list = $("personList");
+  const joinTracks = $("personJoinTracks");
+  joinTracks.addEventListener("change", () => { setError(""); syncChoosing(); });
 
   function thumb(i, cls) {
     const box = el("span", cls);
@@ -58,6 +60,10 @@ export function initPersonSelect(bus) {
   }
 
   function syncChoosing() {
+    if (selected.size < 2) joinTracks.checked = false;
+    joinTracks.disabled = submitting || confirmed;
+    show("personJoinRow", selected.size > 1);
+    show("personJoinHelp", selected.size > 1);
     rows.forEach(({ btn, tag }, i) => {
       const checked = selected.has(i);
       btn.classList.toggle("selected", checked);
@@ -71,7 +77,7 @@ export function initPersonSelect(bus) {
     btn.disabled = !selected.size || submitting || confirmed;
     setText(btn, submitting ? m("job.submitting") : confirmed ? m("person.confirmed")
       : !selected.size ? m("person.check") : selected.size === 1 ? m("person.confirm_one", { number: selected.values().next().value + 1 })
-      : m("person.confirm_multiple", { count: selected.size }));
+      : m(joinTracks.checked ? "person.confirm_join" : "person.confirm_multiple", { count: selected.size }));
   }
 
   function renderLocked(job, candidate) {
@@ -83,7 +89,7 @@ export function initPersonSelect(bus) {
     const chip = el("span", "person-dot");
     chip.style.background = "#10b981";
     name.append(chip, el("span", "", m("person.number", { number: lockedIndex + 1 })));
-    const how = m(job.selection_auto ? "person.chosen_auto" : "person.chosen_manual");
+    const how = m(job.track_fragments?.length ? "person.joined" : job.selection_auto ? "person.chosen_auto" : "person.chosen_manual");
     text.append(name, el("span", "person-meta", how));
     if (candidate) text.append(el("span", "person-meta num",
       m("person.track", { frames: candidate.num_frames, start: candidate.start + 1, end: candidate.end + 1 })));
@@ -106,7 +112,7 @@ export function initPersonSelect(bus) {
     setError("");
     syncChoosing();
     try {
-      const result = await api.selectPeople(id, [...selected]);
+      const result = await api.selectPeople(id, [...selected], joinTracks.checked);
       if (jobId !== id) return;
       confirmed = true;
       bus.emit("person:confirmed", result.people ?? [...selected]);
@@ -132,6 +138,7 @@ export function initPersonSelect(bus) {
     setText($("personTitle"), m(next === "locked" ? "person.reconstructing" : "person.choose"));
     show("personConfirm", next === "choosing");
     show("personCount", next === "choosing");
+    if (next !== "choosing") { show("personJoinRow", false); show("personJoinHelp", false); }
     if (next !== "locked") show("personReselect", false);
     show(card, next !== "hidden");
     if (next === "choosing") renderChoosing();
@@ -152,6 +159,7 @@ export function initPersonSelect(bus) {
         defaultIdx = previewIndex = lockedIndex = null;
         selected.clear();
         submitting = confirmed = false;
+        joinTracks.checked = false;
         setError("");
       }
       if (job.status === "waiting_user" && cands.length) {
@@ -165,7 +173,8 @@ export function initPersonSelect(bus) {
         const changed = mode !== "locked" || lockedIndex !== job.selected_person;
         lockedIndex = job.selected_person;
         if (changed) {
-          const candidate = candidates[lockedIndex] ?? cands[lockedIndex] ?? job.person_track;
+          const candidate = job.track_fragments?.length ? job.person_track
+            : candidates[lockedIndex] ?? cands[lockedIndex] ?? job.person_track;
           setError("");
           setMode("locked", job, candidate);
           bus.emit("person:locked", { candidate, index: lockedIndex });
@@ -185,6 +194,7 @@ export function initPersonSelect(bus) {
       jobId = null; candidates = []; defaultIdx = previewIndex = lockedIndex = null;
       selected.clear();
       submitting = confirmed = false;
+      joinTracks.checked = false;
       setError("");
       setMode("hidden");
       bus.emit("person:candidates", { candidates: [], selected: [], previewIndex: null });
