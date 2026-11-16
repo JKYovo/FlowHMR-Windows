@@ -115,13 +115,13 @@ def check(path) -> Verdict:
     return Verdict("ok", label, info.st_size, expected)
 
 
-def digest(path) -> str:
-    """SHA-256 of the file, reusing the cached value while size and mtime match."""
+def digest(path, *, force: bool = False) -> str:
+    """SHA-256 of a file; explicit deep verification bypasses timestamp caches."""
     path = Path(path)
     info = path.stat()
     relative = relative_name(path)
     entry = _cached_entry(relative) if pinned_asset(relative) else None
-    if entry and _entry_matches(entry, info) and entry.get("sha256"):
+    if not force and entry and _entry_matches(entry, info) and entry.get("sha256"):
         return entry["sha256"]
     hasher = hashlib.sha256()
     with path.open("rb") as stream:
@@ -170,11 +170,16 @@ def verify(deep: bool = False, *, required_paths=None) -> list[Verdict]:
         for path in paths:
             verdict = check(path)
             asset = pinned_asset(relative_name(path))
-            if verdict.ok and deep and asset and asset.sha256:
+            if deep and asset and asset.sha256 and (verdict.ok or verdict.detail_code == "file_digest_mismatch"):
                 try:
-                    if digest(path) != asset.sha256:
+                    # NTFS mounts may give same-size rapid rewrites identical stat
+                    # stamps. A requested deep check must read bytes even when a
+                    # previous cached digest marked the file corrupt.
+                    if digest(path, force=True) != asset.sha256:
                         verdict = Verdict("corrupt", verdict.relative, verdict.size, asset.size,
                                           "SHA-256 与发布值不一致", "file_digest_mismatch")
+                    else:
+                        verdict = Verdict("ok", verdict.relative, verdict.size, asset.size)
                 except OSError:
                     verdict = Verdict("corrupt", verdict.relative, verdict.size, asset.size,
                                       "无法读取文件或文件在校验时发生变化", "file_unreadable")

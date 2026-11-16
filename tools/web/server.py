@@ -261,6 +261,7 @@ MEMBER_DIRS = {}
 JOBS_LOCK = threading.Lock()
 FBX_EXPORT_LOCK = threading.Lock()
 BODY_PREVIEW_LOCK = threading.Lock()
+VIDEO_PREVIEW_LOCK = threading.Lock()
 JOB_QUEUE = queue.Queue()
 _POSTPROCESS = None
 SELECTIONS = {}           # job_id -> {"event": Event, "people": list[int] | None}
@@ -2830,6 +2831,29 @@ def api_pmx_motion(job_id):
     return response
 
 
+def browser_preview_path(canonical):
+    """Repair legacy non-H.264 previews without changing inference coordinates/caches."""
+    import cv2
+    from flowhmr.utils.runtime_video_processing import VideoProcessor
+
+    # Cache separately from inference intermediates. An existing job may have
+    # features and camera intrinsics calculated from the original odd dimensions.
+    directory = os.path.join(os.path.dirname(os.path.dirname(canonical)), "preview", file_stamp(canonical))
+    base = os.path.splitext(os.path.basename(canonical))[0]
+    repaired = os.path.join(directory, f"{base}_30fps_browser.mp4")
+    with VIDEO_PREVIEW_LOCK:
+        if os.path.isfile(repaired):
+            return repaired
+        capture = cv2.VideoCapture(canonical)
+        try:
+            codec = int(capture.get(cv2.CAP_PROP_FOURCC))
+            if codec in tuple(cv2.VideoWriter_fourcc(*tag) for tag in ("avc1", "H264", "h264")):
+                return canonical
+        finally:
+            capture.release()
+        return VideoProcessor.transcode(canonical, directory, browser_compatible=True)
+
+
 @app.route("/api/jobs/<job_id>/<kind>")
 def api_result(job_id, kind):
     job = get_job(job_id)
@@ -2844,6 +2868,12 @@ def api_result(job_id, kind):
         if version == "preview" and not has_preview:
             abort(404)
         path = canonical if has_preview and version != "original" else input_video(job_id)
+        if path == canonical:
+            try:
+                path = browser_preview_path(canonical)
+            except (OSError, RuntimeError) as error:
+                app.logger.warning("Video preview conversion failed for %s: %s", job_id, error)
+                abort(503)
         return send_file(path, conditional=True)
     if kind not in _RESULT_FILES:
         abort(404)

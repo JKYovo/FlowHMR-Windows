@@ -1,0 +1,9 @@
+# Ubuntu / NVIDIA inference, Python 3.10. Keep the upstream validated Torch build.
+-r requirements.txt
+-r tools/web/requirements.txt
+setuptools==75.8.0
+wheel
+opencv-python==4.11.0.86
+opencv-python-headless==4.11.0.86
+pybind11==2.11.1
+cmake>=3.15,<4

@@ -249,12 +249,16 @@ class VideoProcessor:
         start_time: float = 0.0,
         duration: Optional[float] = None,
         force_fps: Optional[int] = 30,
+        *,
+        browser_compatible: bool = False,
     ) -> str:
         """Transcode video to a cached mp4, trying multiple encoders."""
         os.makedirs(backup_dir, exist_ok=True)
         base = osp.splitext(osp.basename(video_path))[0]
         fps_tag = f"_{force_fps}fps" if force_fps else ""
         cache_base = f"{base}{fps_tag}"
+        if browser_compatible:
+            cache_base += "_browser"
         backup_path = osp.join(backup_dir, f"{cache_base}.mp4")
 
         if os.path.exists(backup_path):
@@ -273,7 +277,10 @@ class VideoProcessor:
             if force_fps and encoder_name:
                 # FFmpeg 9 removed -vsync; -fps_mode cfr expresses the same constant
                 # frame-rate behavior for filtered output.
-                cmd += ["-vf", f"fps={int(force_fps)}", "-c:v", encoder_name, "-fps_mode", "cfr", "-pix_fmt", "yuv420p"]
+                # 4:2:0 H.264 requires even dimensions. Pad only the bottom/right
+                # so existing image coordinates are preserved (odd WebM sizes are common).
+                cmd += ["-vf", f"fps={int(force_fps)},pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0",
+                        "-c:v", encoder_name, "-fps_mode", "cfr", "-pix_fmt", "yuv420p"]
                 if "libx264" in encoder_name or "libx265" in encoder_name:
                     cmd += ["-preset", "fast", "-crf", "22"]
                 elif "nvenc" in encoder_name:
@@ -287,7 +294,9 @@ class VideoProcessor:
             return cmd
 
         if force_fps:
-            candidate_encoders: List[Optional[str]] = ["libx264", "h264_nvenc", "mpeg4", "libx265"]
+            candidate_encoders: List[Optional[str]] = ["libx264", "h264_nvenc"]
+            if not browser_compatible:
+                candidate_encoders += ["mpeg4", "libx265"]
         else:
             candidate_encoders = [None]
 
@@ -295,7 +304,11 @@ class VideoProcessor:
         for enc in candidate_encoders:
             cmd = build_cmd(enc)
             try:
-                subprocess.run(cmd, check=True, capture_output=True, text=True)
+                # FFmpeg diagnostics include input/output paths and video metadata.
+                # They must not inherit an ASCII locale on Linux; malformed log
+                # bytes are diagnostic text and must not fail a successful encode.
+                subprocess.run(cmd, check=True, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace")
                 os.replace(tmp_path, backup_path)
                 print(f">>> video transcoding done (using {ffmpeg_exe}, "
                       f"encoder: {enc if enc else 'copy'}): {backup_path}")

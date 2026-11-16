@@ -930,7 +930,8 @@ class V2MInferenceEngine:
         last_error = ""
         for enc in candidate_encoders:
             cmd = build_cmd(enc)
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace")
             if result.returncode == 0:
                 break
             last_error = result.stderr.strip() if result.stderr else str(result.returncode)

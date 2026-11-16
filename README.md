@@ -86,6 +86,11 @@
 
 手动安装的完整目录结构、下载来源和模型用途见 [模型文件说明](models/README.md)。
 
+## Linux 源码运行（NVIDIA）
+
+提供 Linux 安装、启动及模型下载脚本，已在 Ubuntu 22.04、RTX 3060 12 GB 上验证。
+这一路径使用 Python 3.10、CUDA 11.8 版 PyTorch 和本机浏览器，详见 [Linux 安装与运行](docs/linux.md)。
+
 ## 帮助与项目来源
 
 - [Windows 使用、升级和源码构建说明](docs/windows.md) · [报告问题](https://github.com/xiaoerofficial021-collab/FlowHMR-Windows/issues/new)

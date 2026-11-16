@@ -2,6 +2,7 @@ import hashlib
 from importlib.util import module_from_spec, spec_from_file_location
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
@@ -31,6 +32,7 @@ class VideoSourceTest(unittest.TestCase):
             job = dict(id=job_id, ext=".mp4", status="running", source_frames=60, created=0)
             with (patch.object(server, "ARGS", SimpleNamespace(work_dir=directory)),
                   patch.object(server, "JOBS", {job_id: job}),
+                  patch.object(server, "browser_preview_path", side_effect=lambda path: path),
                   patch.object(server, "MEMBER_DIRS", {}), server.app.test_client() as client):
                 status = f"/api/jobs/{job_id}"
                 raw = f"{status}/video?source=original"
@@ -47,6 +49,45 @@ class VideoSourceTest(unittest.TestCase):
                 with client.get(preview, headers={"Range": "bytes=2-"}) as tail:
                     self.assertEqual((tail.status_code, tail.data), (206, converted[2:]))
                     self.assertEqual(tail.headers["Content-Range"], f"bytes 2-{len(converted)-1}/{len(converted)}")
+
+    def test_odd_sized_legacy_preview_is_h264_and_keeps_inference_cache(self):
+        import cv2
+        from flowhmr.utils.runtime_video_processing import VideoProcessor, find_ffmpeg
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = root / "odd.webm"
+            # VP8 and MPEG-4 accept odd dimensions; browser-compatible H.264 4:2:0 does not.
+            subprocess.run([find_ffmpeg(), "-y", "-f", "lavfi", "-i",
+                            "testsrc=size=65x49:rate=30", "-frames:v", "3",
+                            "-c:v", "libvpx", "-pix_fmt", "yuv420p", str(original)],
+                           check=True, capture_output=True)
+            converted = VideoProcessor.transcode(str(original), str(root / "fresh"))
+
+            def check_h264(path):
+                cap = cv2.VideoCapture(str(path))
+                try:
+                    self.assertTrue(cap.isOpened())
+                    self.assertIn(int(cap.get(cv2.CAP_PROP_FOURCC)),
+                                  [cv2.VideoWriter_fourcc(*tag) for tag in ("avc1", "H264", "h264")])
+                    self.assertEqual((int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                                      int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))), (66, 50))
+                    self.assertEqual(int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), 3)
+                    self.assertTrue(cap.read()[0])
+                finally:
+                    cap.release()
+
+            check_h264(converted)
+            self.assertEqual(server.browser_preview_path(converted), converted)
+            canonical = root / "job/input/input_30fps.mp4"
+            canonical.parent.mkdir(parents=True)
+            subprocess.run([find_ffmpeg(), "-y", "-i", str(original), "-c:v", "mpeg4", str(canonical)],
+                           check=True, capture_output=True)
+            before = canonical.read_bytes()
+            repaired = server.browser_preview_path(str(canonical))
+            check_h264(repaired)
+            self.assertEqual(canonical.read_bytes(), before)
+            self.assertEqual(server.browser_preview_path(str(canonical)), repaired)
 
 
 class CharacterFileTest(unittest.TestCase):
@@ -236,6 +277,31 @@ class HistoryTest(unittest.TestCase):
 
 
 class ModelIntegrityTest(unittest.TestCase):
+    def test_deep_verification_detects_and_recovers_same_stamp_rewrites(self):
+        with TemporaryDirectory() as temporary:
+            models = Path(temporary)
+            weight = models / files.FLOWHMR_CKPT
+            weight.parent.mkdir(parents=True)
+            expected = b"good model"
+            weight.write_bytes(expected)
+            asset = sources.Asset(files.FLOWHMR_CKPT, len(expected), hashlib.sha256(expected).hexdigest())
+            # Some NTFS mounts retain every fingerprint field across rapid,
+            # same-size writes. Reproduce that behavior on any test filesystem.
+            stamp = integrity._fingerprint(weight.stat())
+            with (patch.object(files, "MODEL_ROOT", models),
+                  patch.object(integrity, "_CACHE_PATH", models / "cache.json"),
+                  patch.object(integrity, "_cache", None), patch.object(integrity, "_cache_stamp", None),
+                  patch.object(integrity, "_assets", {asset.relative: asset}),
+                  patch.object(integrity, "_fingerprint", return_value=stamp)):
+                self.assertTrue(integrity.verify(deep=True, required_paths=(weight,))[0].ok)
+                weight.write_bytes(b"bad! model")
+                self.assertEqual(integrity.verify(deep=True, required_paths=(weight,))[0].detail_code,
+                                 "file_digest_mismatch")
+                weight.write_bytes(expected)
+                self.assertFalse(integrity.check(weight).ok)
+                self.assertTrue(integrity.verify(deep=True, required_paths=(weight,))[0].ok)
+                self.assertTrue(integrity.check(weight).ok)
+
     def test_archive_import_is_local_and_preserves_folder_clients(self):
         args = SimpleNamespace(device="cuda:0", ckpt=None, model_cfg=None)
         with (patch.object(server, "ARGS", args), patch.object(server, "JOBS", {}),

@@ -3,6 +3,8 @@
 import contextlib
 import io
 import os
+import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -73,6 +75,26 @@ class FindFfmpegTest(unittest.TestCase):
         with self.assertRaises(RuntimeError) as error:
             self.resolve()
         self.assertIn("ffmpeg not found", str(error.exception))
+
+
+class FfmpegDiagnosticEncodingTest(unittest.TestCase):
+    def test_transcode_preserves_success_with_unicode_and_invalid_log_bytes(self):
+        # Run an actual child process emitting the kind of diagnostics that
+        # failed on the Linux software disk, simulating an ASCII locale default.
+        real_run = subprocess.run
+        child = ("import pathlib,sys; "
+                 "sys.stderr.buffer.write('软件盘/视频.mp4'.encode('utf-8') + b'\\xff'); "
+                 "pathlib.Path(sys.argv[-1]).write_bytes(b'encoded video')")
+
+        def ffmpeg_process(command, **kwargs):
+            kwargs.setdefault("encoding", "ascii")
+            return real_run([sys.executable, "-c", child, *command[1:]], **kwargs)
+
+        with (TemporaryDirectory() as temporary,
+              patch.object(video, "find_ffmpeg", return_value="ffmpeg"),
+              patch.object(video.subprocess, "run", side_effect=ffmpeg_process)):
+            target = video.VideoProcessor.transcode("素材.mp4", str(Path(temporary) / "转码"))
+            self.assertEqual(Path(target).read_bytes(), b"encoded video")
 
 
 if __name__ == "__main__":
